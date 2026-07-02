@@ -9,13 +9,13 @@
 // import org.junit.jupiter.api.Test;
 
 // example test. To run these tests, uncomment this file, along with the
-// example resource in java/src/main/java/com/myorg/TerrariaServerStack.java
+// example resource in java/src/main/java/com/myorg/ValheimServerStack.java
 // public class TerrariaServerTest {
 
 //     @Test
 //     public void testStack() throws IOException {
 //         App app = new App();
-//         TerrariaServerStack stack = new TerrariaServerStack(app, "test");
+//         ValheimServerStack stack = new ValheimServerStack(app, "test");
 
 //         Template template = Template.fromStack(stack);
 
