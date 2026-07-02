@@ -8,7 +8,7 @@ public class MinecraftServerApp {
     public static void main(final String[] args) {
         App app = new App();
 
-        new MinecraftServerStack(app, "ValheimServerStack", StackProps.builder()
+        new MinecraftServerStack(app, "MinecraftServerStack", StackProps.builder()
                 // If you don't specify 'env', this stack will be environment-agnostic.
                 // Account/Region-dependent features and context lookups will not work,
                 // but a single synthesized template can be deployed anywhere.
