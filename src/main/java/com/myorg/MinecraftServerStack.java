@@ -20,102 +20,59 @@ import software.amazon.awscdk.StackProps;
 import java.util.List;
 import java.util.Map;
 
-public class ValheimServerStack extends Stack {
-    public ValheimServerStack(final Construct scope, final String id) {
+public class MinecraftServerStack extends Stack {
+    public MinecraftServerStack(final Construct scope, final String id) {
         this(scope, id, null);
     }
 
-    public ValheimServerStack(final Construct scope, final String id, final StackProps props) {
+    public MinecraftServerStack(final Construct scope, final String id, final StackProps props) {
 
         super(scope, id, props);
         String userData = """
-        #!/bin/bash
+#!/bin/bash
         set -e
         
         export DEBIAN_FRONTEND=noninteractive
         
-        # 1. Update system
+        # 1. Update system and install dependencies
         apt-get update
         apt-get upgrade -y -o Dpkg::Options::="--force-confold"
+        apt-get install -y openjdk-21-jre-headless wget curl jq
         
-        # 2. Create steam user
-        useradd -m -s /bin/bash steam
+        # 2. Create minecraft user
+        useradd -m -r -d /opt/minecraft -s /bin/bash minecraft
         
-        # 3. Enable 32-bit and install ALL dependencies BEFORE steamcmd
-        dpkg --add-architecture i386
-        apt-get update
-        apt-get install -y \\
-            lib32gcc-s1 \\
-            lib32stdc++6 \\
-            libsdl2-2.0-0:i386 \\
-            libatomic1 \\
-            libpulse-dev \\
-            libpulse0 \\
-            curl \\
-            wget
+        # 3. Create server directory
+        mkdir -p /opt/minecraft/server
+        cd /opt/minecraft/server
         
-        # 4. Install SteamCMD
-        mkdir -p /opt/steamcmd
-        cd /opt/steamcmd
-        wget https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz
-        tar -xvzf steamcmd_linux.tar.gz
-        rm steamcmd_linux.tar.gz
-        chown -R steam:steam /opt/steamcmd
+        # 4. Fetch the latest Vanilla Minecraft server jar via Mojang API
+        echo "Fetching latest Minecraft server version..."
+        VERSION=$(curl -s https://launchermeta.mojang.com/mc/game/version_manifest.json | jq -r '.latest.release')
+        VERSION_URL=$(curl -s https://launchermeta.mojang.com/mc/game/version_manifest.json | jq -r --arg VERSION "$VERSION" '.versions[] | select(.id==$VERSION) | .url')
+        SERVER_URL=$(curl -s $VERSION_URL | jq -r '.downloads.server.url')
         
-        # 5. Create valheim dir with correct ownership
-        mkdir -p /opt/valheim-server
-        mkdir -p /opt/valheim-server/saves
-        chown -R steam:steam /opt/valheim-server
+        echo "Downloading Minecraft $VERSION server jar..."
+        wget -O server.jar $SERVER_URL
         
-        # 6. Install Valheim server as steam user
+        # 5. Accept EULA automatically
+        echo "eula=true" > eula.txt
         
-        cat > /opt/steamcmd/install_valheim.sh << 'EOFSCRIPT'
-        #!/bin/bash
-        su - steam -c "/opt/steamcmd/steamcmd.sh \\
-            +@sSteamCmdForcePlatformType linux \\
-            +force_install_dir /opt/valheim-server \\
-            +login anonymous \\
-            +app_update 896660 -beta public validate \\
-            +quit"
-EOFSCRIPT
-        chmod +x /opt/steamcmd/install_valheim.sh
-        chown steam:steam /opt/steamcmd/install_valheim.sh
-        su - steam -c "/opt/steamcmd/install_valheim.sh"
-
-        # 7. Create launch script
-        cat > /opt/valheim-server/launch_server.sh << 'LAUNCHEREOF'
-        #!/bin/bash
-        cd /opt/valheim-server
-        ./valheim_server.x86_64 \\
-            -nographics \\
-            -batchmode \\
-            -name "My AWS Server" \\
-            -port 2456 \\
-            -world "AmazonVikingForest" \\
-            -password "123123" \\
-            -crossplay \\
-            -public 0 \\
-            -savedir /opt/valheim-server/saves \\
-            -preset hard
-LAUNCHEREOF
-    
-        chmod +x /opt/valheim-server/launch_server.sh
-        chown steam:steam /opt/valheim-server/launch_server.sh
-    
-        # 8. Create systemd service
-        cat > /etc/systemd/system/valheim.service << 'SERVICEEOF'
+        # 6. Set ownership
+        chown -R minecraft:minecraft /opt/minecraft
+        
+        # 7. Create systemd service
+        cat > /etc/systemd/system/minecraft.service << 'SERVICEEOF'
         [Unit]
-        Description=Valheim Dedicated Server
+        Description=Minecraft Dedicated Server
         After=network.target
 
         [Service]
         Type=simple
-        User=steam
-        WorkingDirectory=/opt/valheim-server
-        Environment=LD_LIBRARY_PATH=/opt/valheim-server/linux64
-        # Automatically update the server before starting
-        ExecStartPre=/opt/steamcmd/steamcmd.sh +@sSteamCmdForcePlatformType linux +force_install_dir /opt/valheim-server +login anonymous +app_update 896660 -beta public validate +quit
-        ExecStart=/opt/valheim-server/launch_server.sh
+        User=minecraft
+        WorkingDirectory=/opt/minecraft/server
+        # Adjust JVM memory arguments (-Xmx and -Xms) as needed based on instance type
+        ExecStart=/usr/bin/java -Xmx4G -Xms4G -jar server.jar nogui
         Restart=on-failure
         RestartSec=10
         StandardOutput=journal
@@ -125,16 +82,16 @@ LAUNCHEREOF
         WantedBy=multi-user.target
 SERVICEEOF
     
-        # Enable and start the service
+        # 8. Enable and start the service
         systemctl daemon-reload
-        systemctl enable valheim.service
-        systemctl start valheim.service
+        systemctl enable minecraft.service
+        systemctl start minecraft.service
     
-        echo "Valheim server installation complete!"
+        echo "Minecraft server installation complete!"
     """;
 
         // Create VPC with NAT Gateway for private subnet egress
-        Vpc vpc = Vpc.Builder.create(this, "ValheimVpc")
+        Vpc vpc = Vpc.Builder.create(this, "MinecraftVpc")
                 .maxAzs(1)
                 .natGateways(0)
                 .subnetConfiguration(List.of(
@@ -147,20 +104,19 @@ SERVICEEOF
                 .build();
 
         // Security Group
-        SecurityGroup sg = SecurityGroup.Builder.create(this, "ValheimSG")
+        SecurityGroup sg = SecurityGroup.Builder.create(this, "MinecraftSG")
                 .vpc(vpc)
-                .description("Security group for Valheim game server")
+                .description("Security group for Minecraft game server")
                 .allowAllOutbound(true)
                 .build();
 
         // Game port
-        sg.addIngressRule(Peer.anyIpv4(), Port.udpRange(2456, 2458), "Valheim Game Ports");
-
+        sg.addIngressRule(Peer.anyIpv4(), Port.tcp(25565), "Minecraft Game Port");
         // Optional: SSH access (comment out if not needed)
         sg.addIngressRule(Peer.anyIpv4(), Port.tcp(22), "SSH Access");
 
         // IAM Role for EC2 instance
-        Role ec2Role = Role.Builder.create(this, "ValheimEC2Role")
+        Role ec2Role = Role.Builder.create(this, "MinecraftEC2Role")
                 .assumedBy(new ServicePrincipal("ec2.amazonaws.com"))
                 .managedPolicies(List.of(
                         ManagedPolicy.fromManagedPolicyArn(
@@ -172,10 +128,10 @@ SERVICEEOF
                 .build();
 
         // SSH KeyPair
-        IKeyPair keyPair = KeyPair.fromKeyPairName(this, "key-09e0010f25fc66508", "ValheimKeyPair");
+        IKeyPair keyPair = KeyPair.fromKeyPairName(this, "key-09e0010f25fc66508", "Minecraft");
 
         // EC2 Instance
-        Instance ec2 = Instance.Builder.create(this, "ValheimServer")
+        Instance ec2 = Instance.Builder.create(this, "MinecraftServer")
                 .vpc(vpc)
                 .instanceType(InstanceType.of(InstanceClass.M7I_FLEX, InstanceSize.LARGE))
                 .machineImage(MachineImage.genericLinux(Map.of(
@@ -201,11 +157,11 @@ SERVICEEOF
         ec2.addUserData(userData);
 
         // Elastic IP for static public address
-        CfnEIP eip = CfnEIP.Builder.create(this, "ValheimEIP")
+        CfnEIP eip = CfnEIP.Builder.create(this, "MinecraftEIP")
                 .domain("vpc")
                 .build();  // Remove instanceId from here
 
-        CfnEIPAssociation.Builder.create(this, "ValheimEIPAssociation")
+        CfnEIPAssociation.Builder.create(this, "MinecraftEIPAssociation")
                 .allocationId(eip.getAttrAllocationId())
                 .instanceId(ec2.getInstanceId())
                 .build();
@@ -314,11 +270,11 @@ SERVICEEOF
                 .build();
 
         // API Gateway
-        LambdaRestApi api = LambdaRestApi.Builder.create(this, "ValheimApi")
+        LambdaRestApi api = LambdaRestApi.Builder.create(this, "MinecraftApi")
                 .handler(startLambda)
                 .proxy(false)
-                .restApiName("Valheim Server Control API")
-                .description("API to control Valheim game server")
+                .restApiName("Minecraft Server Control API")
+                .description("API to control Minecraft game server")
                 .build();
 
         Resource startResource = api.getRoot().addResource("start-server");
@@ -338,12 +294,12 @@ SERVICEEOF
 
         CfnOutput.Builder.create(this, "ServerPublicIP")
                 .value(eip.getRef())
-                .description("Public IP to connect to Valheim server (port 2456) and SSH (port 22)")
+                .description("Public IP to connect to Minecraft server (port 2456) and SSH (port 22)")
                 .build();
 
         CfnOutput.Builder.create(this, "GameServerAddress")
                 .value(eip.getRef() + ":2456")
-                .description("Direct connect address for Valheim")
+                .description("Direct connect address for Minecraft")
                 .build();
 
         CfnOutput.Builder.create(this, "ApiEndpoint")
